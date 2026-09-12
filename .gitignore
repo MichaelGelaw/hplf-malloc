@@ -1,0 +1,12 @@
+# Private coordination, rules, state, and planning stay on this computer.
+/.local/
+
+# Generated build and local tooling state; retain source and benchmark evidence.
+/build/
+/out/
+/.cache/
+*.profraw
+*.profdata
+perf.data
+perf.data.old
+__pycache__/
