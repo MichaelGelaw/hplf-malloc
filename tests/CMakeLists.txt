@@ -143,6 +143,24 @@ set_tests_properties(cache PROPERTIES
     TIMEOUT 20
 )
 
+add_executable(hplf_test_transfer_atomic
+    test_transfer_atomic.c
+    ${PROJECT_SOURCE_DIR}/src/transfer_atomic.c
+)
+hplf_configure_target(hplf_test_transfer_atomic)
+target_compile_definitions(hplf_test_transfer_atomic PRIVATE HPLF_TESTING)
+target_include_directories(hplf_test_transfer_atomic
+    PRIVATE ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(hplf_test_transfer_atomic PRIVATE Threads::Threads)
+
+add_test(NAME transfer_atomic COMMAND hplf_test_transfer_atomic)
+set_tests_properties(transfer_atomic PROPERTIES
+    LABELS "unit;concurrency;atomic"
+    PASS_REGULAR_EXPRESSION "atomic-transfer controlled schedules passed"
+    TIMEOUT 20
+)
+
 add_library(hplf_test_cached_mutex_core STATIC ${HPLF_CACHED_MUTEX_SOURCES})
 hplf_configure_target(hplf_test_cached_mutex_core)
 target_compile_definitions(hplf_test_cached_mutex_core PRIVATE
