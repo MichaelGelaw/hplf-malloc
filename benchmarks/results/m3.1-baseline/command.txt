@@ -1,0 +1,5 @@
+Command: scripts/run_benchmarks.sh m3.1-baseline
+Matrix: fixed workload, 1 thread, seed 20260912, 5 repetitions per variant
+Durations: 1s warmup, 3s measured
+Order: libc/hplf alternates by repetition
+Interpretation: foundational baseline rows only; no performance conclusion is made here.
