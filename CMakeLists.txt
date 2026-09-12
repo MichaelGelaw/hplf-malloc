@@ -53,6 +53,7 @@ set(HPLF_SOURCES
 set(HPLF_CACHED_MUTEX_SOURCES
     ${HPLF_SOURCES}
     ${PROJECT_SOURCE_DIR}/src/thread_cache.c
+    ${PROJECT_SOURCE_DIR}/src/thread_cache_lifecycle.c
     ${PROJECT_SOURCE_DIR}/src/transfer_mutex.c
 )
 

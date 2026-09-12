@@ -8,6 +8,7 @@
 #ifdef HPLF_VARIANT_CACHED_MUTEX
 #include "allocator_test.h"
 #include "thread_cache.h"
+#include "thread_cache_lifecycle.h"
 #include "transfer_list.h"
 #include "transfer_mutex.h"
 #endif
@@ -34,9 +35,6 @@ static struct hplf_allocator_state allocator_state = {
 };
 
 #ifdef HPLF_VARIANT_CACHED_MUTEX
-/* M4.1 staging: M4.2 replaces this embedded TLS cache with managed descriptors. */
-static _Thread_local struct hplf_thread_cache thread_cache;
-
 #ifdef HPLF_TESTING
 static _Thread_local struct hplf_cached_test_stats cached_test_stats;
 #endif
@@ -49,9 +47,12 @@ static void *hplf_allocate_small(size_t requested_size,
 #ifdef HPLF_VARIANT_CACHED_MUTEX
     struct hplf_transfer_list available;
     struct hplf_transfer_list direct;
-    struct hplf_block *block = hplf_thread_cache_take(&thread_cache,
-                                                       class_index,
-                                                       class_capacity);
+    struct hplf_thread_cache *cache = hplf_cache_acquire();
+    struct hplf_block *block = cache != NULL
+                                   ? hplf_thread_cache_take(cache,
+                                                            class_index,
+                                                            class_capacity)
+                                   : NULL;
 
     if (block != NULL) {
 #ifdef HPLF_TESTING
@@ -101,14 +102,16 @@ static void *hplf_allocate_small(size_t requested_size,
 #endif
     }
 
-    /* Keep a bounded refill locally and return the detached remainder as one batch. */
-    hplf_thread_cache_refill(&thread_cache,
-                             class_index,
-                             class_capacity,
-                             &available);
-    block = hplf_thread_cache_take(&thread_cache,
-                                   class_index,
-                                   class_capacity);
+    /* Setup failure permanently uses the shared transfer path for this thread. */
+    if (cache != NULL) {
+        hplf_thread_cache_refill(cache,
+                                 class_index,
+                                 class_capacity,
+                                 &available);
+        block = hplf_thread_cache_take(cache,
+                                       class_index,
+                                       class_capacity);
+    }
     if (block == NULL) {
         hplf_transfer_list_take_prefix(&available, 1, &direct);
         block = direct.first;
@@ -239,16 +242,24 @@ void hplf_free(void *pointer)
         size_t class_index = block->owner.small.slab->class_index;
 
 #ifdef HPLF_VARIANT_CACHED_MUTEX
+        struct hplf_thread_cache *cache = hplf_cache_acquire();
         size_t class_capacity = block->capacity;
         size_t eviction_class;
         struct hplf_transfer_list eviction;
 
         block->requested_size = 0;
-        hplf_thread_cache_store(&thread_cache,
-                                class_index,
-                                class_capacity,
-                                block);
-        while (hplf_thread_cache_extract_eviction(&thread_cache,
+        if (cache == NULL) {
+            block->next_free = NULL;
+            eviction = (struct hplf_transfer_list){block, block, 1};
+#ifdef HPLF_TESTING
+            ++cached_test_stats.published_blocks;
+#endif
+            hplf_transfer_mutex_publish(class_index, &eviction);
+            errno = saved_errno;
+            return;
+        }
+        hplf_thread_cache_store(cache, class_index, class_capacity, block);
+        while (hplf_thread_cache_extract_eviction(cache,
                                                   class_index,
                                                   &eviction_class,
                                                   &eviction)) {
@@ -352,22 +363,11 @@ void *hplf_realloc(void *pointer, size_t size)
 void hplf_thread_flush(void)
 {
 #ifdef HPLF_VARIANT_CACHED_MUTEX
-    size_t class_index;
-
-    /* I08: class-index order makes explicit and exit flushes reproducible. */
-    for (class_index = 0; class_index < HPLF_SIZE_CLASS_COUNT; ++class_index) {
-        struct hplf_transfer_list list;
-
-        if (hplf_thread_cache_extract_class(&thread_cache,
-                                            class_index,
-                                            SIZE_MAX,
-                                            &list)) {
 #ifdef HPLF_TESTING
-            cached_test_stats.published_blocks += list.count;
+    cached_test_stats.published_blocks += hplf_cache_flush_current();
+#else
+    (void)hplf_cache_flush_current();
 #endif
-            hplf_transfer_mutex_publish(class_index, &list);
-        }
-    }
 #else
     /* ADR-006: the locked baseline has no thread-local cache to publish. */
 #endif
@@ -563,16 +563,26 @@ static size_t hplf_cached_block_occurrences(
 
 bool hplf_cached_test_snapshot(struct hplf_cached_test_snapshot *snapshot)
 {
+    struct hplf_thread_cache *cache = hplf_cache_current();
     struct hplf_thread_cache_snapshot local;
     struct hplf_transfer_list lists[HPLF_SIZE_CLASS_COUNT];
     struct hplf_block *heads[HPLF_SIZE_CLASS_COUNT];
+    struct hplf_block *local_heads[HPLF_SIZE_CLASS_COUNT] = {NULL};
     struct hplf_slab *slab;
     size_t class_index;
     bool valid = true;
 
     *snapshot = (struct hplf_cached_test_snapshot){0};
-    snapshot->cache_counts_match = hplf_thread_cache_snapshot(&thread_cache,
-                                                               &local);
+    local = (struct hplf_thread_cache_snapshot){0};
+    snapshot->cache_counts_match = true;
+    if (cache != NULL) {
+        snapshot->cache_counts_match = hplf_thread_cache_snapshot(cache,
+                                                                   &local);
+        for (class_index = 0; class_index < HPLF_SIZE_CLASS_COUNT;
+             ++class_index) {
+            local_heads[class_index] = cache->heads[class_index];
+        }
+    }
     for (class_index = 0; class_index < HPLF_SIZE_CLASS_COUNT; ++class_index) {
         snapshot->current_local_blocks += local.counts[class_index];
     }
@@ -593,7 +603,7 @@ bool hplf_cached_test_snapshot(struct hplf_cached_test_snapshot *snapshot)
     snapshot->transfer_counts_match = true;
     snapshot->unique_free_blocks = true;
     for (class_index = 0; class_index < HPLF_SIZE_CLASS_COUNT; ++class_index) {
-        struct hplf_block *local_block = thread_cache.heads[class_index];
+        struct hplf_block *local_block = local_heads[class_index];
         struct hplf_block *block = heads[class_index];
         size_t traversed = 0;
 
@@ -603,7 +613,7 @@ bool hplf_cached_test_snapshot(struct hplf_cached_test_snapshot *snapshot)
                 local_block->owner.small.slab->class_index != class_index ||
                 hplf_cached_block_occurrences(local_block, heads) != 0 ||
                 hplf_cached_block_occurrences(local_block,
-                                              thread_cache.heads) != 1) {
+                                              local_heads) != 1) {
                 snapshot->unique_free_blocks = false;
             }
             local_block = local_block->next_free;

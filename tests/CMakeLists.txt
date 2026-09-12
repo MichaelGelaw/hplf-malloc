@@ -174,6 +174,37 @@ set_tests_properties(cached_allocator PROPERTIES
     TIMEOUT 20
 )
 
+add_executable(hplf_test_thread_lifecycle test_thread_lifecycle.c)
+hplf_configure_target(hplf_test_thread_lifecycle)
+target_compile_definitions(hplf_test_thread_lifecycle PRIVATE
+    HPLF_TESTING
+    HPLF_VARIANT_CACHED_MUTEX
+)
+target_include_directories(hplf_test_thread_lifecycle
+    PRIVATE ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(hplf_test_thread_lifecycle PRIVATE
+    hplf_test_cached_mutex_core
+    Threads::Threads
+)
+foreach(scenario IN ITEMS
+        churn
+        cross-free
+        key-failure
+        map-failure
+        registration-failure
+        late-callback
+        callback-order)
+    add_test(NAME thread_lifecycle_${scenario}
+        COMMAND hplf_test_thread_lifecycle ${scenario}
+    )
+    set_tests_properties(thread_lifecycle_${scenario} PROPERTIES
+        LABELS "api;concurrency;cache;lifecycle"
+        PASS_REGULAR_EXPRESSION "thread-lifecycle scenario=${scenario} ok"
+        TIMEOUT 120
+    )
+endforeach()
+
 add_executable(hplf_test_cached_api test_api.c)
 hplf_configure_target(hplf_test_cached_api)
 target_compile_definitions(hplf_test_cached_api PRIVATE HPLF_TESTING)
