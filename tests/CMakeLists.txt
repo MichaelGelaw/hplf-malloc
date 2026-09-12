@@ -143,6 +143,70 @@ set_tests_properties(cache PROPERTIES
     TIMEOUT 20
 )
 
+add_library(hplf_test_cached_mutex_core STATIC ${HPLF_CACHED_MUTEX_SOURCES})
+hplf_configure_target(hplf_test_cached_mutex_core)
+target_compile_definitions(hplf_test_cached_mutex_core PRIVATE
+    HPLF_TESTING
+    HPLF_VARIANT_CACHED_MUTEX
+)
+target_include_directories(hplf_test_cached_mutex_core
+    PUBLIC ${PROJECT_SOURCE_DIR}/include
+    PRIVATE ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(hplf_test_cached_mutex_core PRIVATE Threads::Threads)
+
+add_executable(hplf_test_cached_allocator test_cached_allocator.c)
+hplf_configure_target(hplf_test_cached_allocator)
+target_compile_definitions(hplf_test_cached_allocator PRIVATE
+    HPLF_TESTING
+    HPLF_VARIANT_CACHED_MUTEX
+)
+target_include_directories(hplf_test_cached_allocator PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(hplf_test_cached_allocator PRIVATE
+    hplf_test_cached_mutex_core
+    Threads::Threads
+)
+
+add_test(NAME cached_allocator COMMAND hplf_test_cached_allocator)
+set_tests_properties(cached_allocator PROPERTIES
+    LABELS "api;unit;concurrency;cache"
+    PASS_REGULAR_EXPRESSION "cached-mutex local_hits="
+    TIMEOUT 20
+)
+
+add_executable(hplf_test_cached_api test_api.c)
+hplf_configure_target(hplf_test_cached_api)
+target_compile_definitions(hplf_test_cached_api PRIVATE HPLF_TESTING)
+target_include_directories(hplf_test_cached_api PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(hplf_test_cached_api PRIVATE
+    hplf_test_cached_mutex_core
+    hplf_test_pattern
+)
+add_test(NAME cached_api COMMAND hplf_test_cached_api)
+set_tests_properties(cached_api PROPERTIES LABELS "api;cache" TIMEOUT 20)
+
+add_executable(hplf_test_cached_randomized test_randomized.c)
+hplf_configure_target(hplf_test_cached_randomized)
+target_compile_definitions(hplf_test_cached_randomized PRIVATE HPLF_TESTING)
+target_include_directories(hplf_test_cached_randomized PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(hplf_test_cached_randomized PRIVATE
+    hplf_test_cached_mutex_core
+    hplf_test_pattern
+)
+add_test(NAME cached_randomized COMMAND hplf_test_cached_randomized)
+set_tests_properties(cached_randomized PROPERTIES
+    LABELS "api;randomized;cache"
+    TIMEOUT 120
+)
+
+add_executable(hplf_test_cached_trim test_trim.c)
+hplf_configure_target(hplf_test_cached_trim)
+target_compile_definitions(hplf_test_cached_trim PRIVATE HPLF_TESTING)
+target_include_directories(hplf_test_cached_trim PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(hplf_test_cached_trim PRIVATE hplf_test_cached_mutex_core)
+add_test(NAME cached_trim COMMAND hplf_test_cached_trim)
+set_tests_properties(cached_trim PROPERTIES LABELS "api;cache" TIMEOUT 20)
+
 find_program(HPLF_BASH_PROGRAM bash REQUIRED)
 set(HPLF_CLIENT_SANITIZER none)
 if(HPLF_ENABLE_ASAN_UBSAN)

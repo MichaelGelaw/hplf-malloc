@@ -796,6 +796,7 @@ static void *run_churn_child(void *opaque)
 
     if (pointer == NULL) {
         child->failed = 1;
+        benchmark_flush();
         return NULL;
     }
     (void)payload_fill(pointer, 64, child->key);
@@ -803,6 +804,7 @@ static void *run_churn_child(void *opaque)
         child->failed = 1;
     }
     benchmark_deallocate(pointer);
+    benchmark_flush();
     return NULL;
 }
 
@@ -884,7 +886,7 @@ static void *run_worker(void *opaque)
 
     signal_counter(run, &run->ready);
     if (!wait_for_phase(worker, PHASE_PREPARE_WARMUP)) {
-        return NULL;
+        goto done;
     }
     if (!prepare_slots(worker)) {
         atomic_store(&run->failed, 1);
@@ -892,7 +894,7 @@ static void *run_worker(void *opaque)
     signal_counter(run, &run->warmup_ready);
     if (!wait_for_phase(worker, PHASE_WARMUP)) {
         cleanup_slots(worker);
-        return NULL;
+        goto done;
     }
     if (!atomic_load(&run->failed) && !run_worker_phase(worker, &ignored)) {
         atomic_store(&run->failed, 1);
@@ -901,7 +903,7 @@ static void *run_worker(void *opaque)
     signal_counter(run, &run->warmup_done);
 
     if (!wait_for_phase(worker, PHASE_PREPARE_MEASUREMENT)) {
-        return NULL;
+        goto done;
     }
     if (!prepare_slots(worker)) {
         atomic_store(&run->failed, 1);
@@ -909,13 +911,16 @@ static void *run_worker(void *opaque)
     signal_counter(run, &run->measurement_ready);
     if (!wait_for_phase(worker, PHASE_MEASUREMENT)) {
         cleanup_slots(worker);
-        return NULL;
+        goto done;
     }
     if (!atomic_load(&run->failed) &&
         !run_worker_phase(worker, &worker->stats)) {
         atomic_store(&run->failed, 1);
     }
     cleanup_slots(worker);
+done:
+    /* Cached variants must publish private frees before this pthread exits. */
+    benchmark_flush();
     return NULL;
 }
 

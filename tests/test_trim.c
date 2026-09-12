@@ -25,10 +25,12 @@ int main(void)
     CHECK(live != NULL && other != NULL);
     memset(live, 0x5a, 192);
     hplf_free(other);
+    hplf_thread_flush();
     CHECK(hplf_trim_quiescent() == 0);
     CHECK(live[0] == 0x5a && live[191] == 0x5a);
 
     hplf_free(live);
+    hplf_thread_flush();
     hplf_os_test_faults_reset();
     hplf_os_test_fail_unmap_on(1);
     CHECK(hplf_trim_quiescent() == 0);
@@ -38,6 +40,7 @@ int main(void)
     other = hplf_malloc(192);
     CHECK(other != NULL);
     hplf_free(other);
+    hplf_thread_flush();
     released = hplf_trim_quiescent();
     CHECK(released >= 64 * 1024);
     CHECK(hplf_trim_quiescent() == 0);
@@ -45,6 +48,7 @@ int main(void)
     other = hplf_malloc(192);
     CHECK(other != NULL);
     hplf_free(other);
+    hplf_thread_flush();
     CHECK(hplf_trim_quiescent() >= 64 * 1024);
     return 0;
 }

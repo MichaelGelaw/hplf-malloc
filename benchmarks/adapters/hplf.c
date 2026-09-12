@@ -2,9 +2,13 @@
 
 #include <hplf/allocator.h>
 
+#ifndef HPLF_BENCHMARK_ADAPTER_NAME
+#define HPLF_BENCHMARK_ADAPTER_NAME "hplf_locked"
+#endif
+
 const char *benchmark_adapter_name(void)
 {
-    return "hplf_locked";
+    return HPLF_BENCHMARK_ADAPTER_NAME;
 }
 
 const char *benchmark_adapter_version(void)

@@ -50,6 +50,12 @@ set(HPLF_SOURCES
     ${PROJECT_SOURCE_DIR}/src/slab.c
 )
 
+set(HPLF_CACHED_MUTEX_SOURCES
+    ${HPLF_SOURCES}
+    ${PROJECT_SOURCE_DIR}/src/thread_cache.c
+    ${PROJECT_SOURCE_DIR}/src/transfer_mutex.c
+)
+
 add_library(hplf_static STATIC ${HPLF_SOURCES})
 add_library(hplf_shared SHARED ${HPLF_SOURCES})
 
@@ -68,6 +74,27 @@ foreach(target IN ITEMS hplf_static hplf_shared)
         OUTPUT_NAME hplf
     )
 endforeach()
+
+add_library(hplf_cached_mutex_static STATIC ${HPLF_CACHED_MUTEX_SOURCES})
+add_library(hplf_cached_mutex_shared SHARED ${HPLF_CACHED_MUTEX_SOURCES})
+foreach(target IN ITEMS hplf_cached_mutex_static hplf_cached_mutex_shared)
+    hplf_configure_target(${target})
+    target_compile_definitions(${target} PRIVATE HPLF_VARIANT_CACHED_MUTEX)
+    target_include_directories(${target}
+        PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+        PRIVATE ${PROJECT_SOURCE_DIR}/src
+    )
+    target_link_libraries(${target} PRIVATE Threads::Threads)
+    set_target_properties(${target} PROPERTIES
+        C_VISIBILITY_PRESET hidden
+        OUTPUT_NAME hplf_cached_mutex
+    )
+endforeach()
+
+set_target_properties(hplf_cached_mutex_shared PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+)
 
 set_target_properties(hplf_shared PROPERTIES
     VERSION ${PROJECT_VERSION}

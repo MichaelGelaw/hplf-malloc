@@ -16,6 +16,21 @@ hplf_configure_target(hplf_bench_locked)
 target_include_directories(hplf_bench_locked PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(hplf_bench_locked PRIVATE hplf_static Threads::Threads)
 
+add_executable(hplf_bench_cached_mutex
+    bench_main.c
+    workloads.c
+    adapters/hplf.c
+)
+hplf_configure_target(hplf_bench_cached_mutex)
+target_compile_definitions(hplf_bench_cached_mutex PRIVATE
+    HPLF_BENCHMARK_ADAPTER_NAME="hplf_cached_mutex"
+)
+target_include_directories(hplf_bench_cached_mutex PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(hplf_bench_cached_mutex PRIVATE
+    hplf_cached_mutex_static
+    Threads::Threads
+)
+
 if(BUILD_TESTING)
     set(HPLF_BENCHMARK_SMOKE_ARGUMENTS
         --threads 2
@@ -74,6 +89,45 @@ if(BUILD_TESTING)
             LABELS "benchmark;smoke"
             PASS_REGULAR_EXPRESSION
                 "\\\"status\\\":\\\"smoke\\\".*\\\"threads\\\":${thread_count}"
+            TIMEOUT 20
+        )
+    endforeach()
+
+    foreach(workload IN ITEMS handoff ring churn)
+        add_test(NAME benchmark_cached_mutex_${workload}_smoke
+            COMMAND hplf_bench_cached_mutex
+                --workload ${workload}
+                --threads 4
+                --seed 29
+                --warmup-seconds 0.005
+                --seconds 0.01
+                --live-slots 32
+                --output -
+        )
+        set_tests_properties(benchmark_cached_mutex_${workload}_smoke PROPERTIES
+            LABELS "benchmark;smoke;cache;concurrency"
+            PASS_REGULAR_EXPRESSION
+                "\"variant\":\"hplf_cached_mutex\".*\"workload\":\"${workload}\""
+            TIMEOUT 20
+        )
+    endforeach()
+
+    foreach(thread_count IN ITEMS 1 4)
+        add_test(NAME benchmark_cached_mutex_${thread_count}_thread_smoke
+            COMMAND hplf_bench_cached_mutex
+                --workload fixed
+                --threads ${thread_count}
+                --seed 17
+                --warmup-seconds 0.005
+                --seconds 0.01
+                --live-slots 32
+                --output -
+        )
+        set_tests_properties(benchmark_cached_mutex_${thread_count}_thread_smoke
+            PROPERTIES
+            LABELS "benchmark;smoke;cache"
+            PASS_REGULAR_EXPRESSION
+                "\"variant\":\"hplf_cached_mutex\".*\"threads\":${thread_count}"
             TIMEOUT 20
         )
     endforeach()

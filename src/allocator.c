@@ -5,29 +5,130 @@
 #include "size_class.h"
 #include "slab.h"
 
+#ifdef HPLF_VARIANT_CACHED_MUTEX
+#include "allocator_test.h"
+#include "thread_cache.h"
+#include "transfer_list.h"
+#include "transfer_mutex.h"
+#endif
+
 #include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <string.h>
 
-struct hplf_locked_state {
-    pthread_mutex_t mutex;
+struct hplf_allocator_state {
+    pthread_mutex_t registry_mutex;
+#ifndef HPLF_VARIANT_CACHED_MUTEX
     struct hplf_block *free_lists[HPLF_SIZE_CLASS_COUNT];
+#endif
     struct hplf_slab *slabs;
 };
 
-static struct hplf_locked_state allocator_state = {
-    .mutex = PTHREAD_MUTEX_INITIALIZER,
+static struct hplf_allocator_state allocator_state = {
+    .registry_mutex = PTHREAD_MUTEX_INITIALIZER,
+#ifndef HPLF_VARIANT_CACHED_MUTEX
     .free_lists = {NULL},
+#endif
     .slabs = NULL
 };
+
+#ifdef HPLF_VARIANT_CACHED_MUTEX
+/* M4.1 staging: M4.2 replaces this embedded TLS cache with managed descriptors. */
+static _Thread_local struct hplf_thread_cache thread_cache;
+
+#ifdef HPLF_TESTING
+static _Thread_local struct hplf_cached_test_stats cached_test_stats;
+#endif
+#endif
 
 static void *hplf_allocate_small(size_t requested_size,
                                  size_t class_index,
                                  size_t class_capacity)
 {
+#ifdef HPLF_VARIANT_CACHED_MUTEX
+    struct hplf_transfer_list available;
+    struct hplf_transfer_list direct;
+    struct hplf_block *block = hplf_thread_cache_take(&thread_cache,
+                                                       class_index,
+                                                       class_capacity);
+
+    if (block != NULL) {
+#ifdef HPLF_TESTING
+        ++cached_test_stats.local_hits;
+#endif
+        block->requested_size = requested_size;
+        return hplf_block_payload(block);
+    }
+
+    hplf_transfer_mutex_detach(class_index, &available);
+    if (available.first == NULL) {
+        struct hplf_slab *slab;
+        struct hplf_block *new_free_list;
+        int error = pthread_mutex_lock(&allocator_state.registry_mutex);
+
+        if (error != 0) {
+            errno = error;
+            return NULL;
+        }
+
+        /* Serialize the empty recheck with slab creation to avoid excess maps. */
+        hplf_transfer_mutex_detach(class_index, &available);
+        if (available.first == NULL) {
+            if (!hplf_slab_create(class_index,
+                                  class_capacity,
+                                  &slab,
+                                  &new_free_list)) {
+                (void)pthread_mutex_unlock(&allocator_state.registry_mutex);
+                errno = ENOMEM;
+                return NULL;
+            }
+            slab->next = allocator_state.slabs;
+            allocator_state.slabs = slab;
+            hplf_transfer_list_from_chain(&available, new_free_list);
+#ifdef HPLF_TESTING
+            ++cached_test_stats.slab_misses;
+#endif
+        } else {
+#ifdef HPLF_TESTING
+            ++cached_test_stats.shared_refills;
+#endif
+        }
+        (void)pthread_mutex_unlock(&allocator_state.registry_mutex);
+    } else {
+#ifdef HPLF_TESTING
+        ++cached_test_stats.shared_refills;
+#endif
+    }
+
+    /* Keep a bounded refill locally and return the detached remainder as one batch. */
+    hplf_thread_cache_refill(&thread_cache,
+                             class_index,
+                             class_capacity,
+                             &available);
+    block = hplf_thread_cache_take(&thread_cache,
+                                   class_index,
+                                   class_capacity);
+    if (block == NULL) {
+        hplf_transfer_list_take_prefix(&available, 1, &direct);
+        block = direct.first;
+        hplf_transfer_list_clear(&direct);
+    }
+    if (block == NULL) {
+        /* Defensive only: slab creation and nonempty detach both promise a node. */
+        hplf_transfer_mutex_publish(class_index, &available);
+        errno = ENOMEM;
+        return NULL;
+    }
+#ifdef HPLF_TESTING
+    cached_test_stats.published_blocks += available.count;
+#endif
+    hplf_transfer_mutex_publish(class_index, &available);
+    block->requested_size = requested_size;
+    return hplf_block_payload(block);
+#else
     struct hplf_block *block;
-    int error = pthread_mutex_lock(&allocator_state.mutex);
+    int error = pthread_mutex_lock(&allocator_state.registry_mutex);
 
     if (error != 0) {
         errno = error;
@@ -43,7 +144,7 @@ static void *hplf_allocate_small(size_t requested_size,
                               class_capacity,
                               &slab,
                               &new_free_list)) {
-            (void)pthread_mutex_unlock(&allocator_state.mutex);
+            (void)pthread_mutex_unlock(&allocator_state.registry_mutex);
             errno = ENOMEM;
             return NULL;
         }
@@ -59,12 +160,13 @@ static void *hplf_allocate_small(size_t requested_size,
     block->next_free = NULL;
     block->requested_size = requested_size;
 
-    error = pthread_mutex_unlock(&allocator_state.mutex);
+    error = pthread_mutex_unlock(&allocator_state.registry_mutex);
     if (error != 0) {
         errno = error;
         return NULL;
     }
     return hplf_block_payload(block);
+#endif
 }
 
 static void *hplf_allocate_large(size_t requested_size)
@@ -136,12 +238,33 @@ void hplf_free(void *pointer)
     if (block->kind == HPLF_BLOCK_SMALL) {
         size_t class_index = block->owner.small.slab->class_index;
 
-        if (pthread_mutex_lock(&allocator_state.mutex) == 0) {
+#ifdef HPLF_VARIANT_CACHED_MUTEX
+        size_t class_capacity = block->capacity;
+        size_t eviction_class;
+        struct hplf_transfer_list eviction;
+
+        block->requested_size = 0;
+        hplf_thread_cache_store(&thread_cache,
+                                class_index,
+                                class_capacity,
+                                block);
+        while (hplf_thread_cache_extract_eviction(&thread_cache,
+                                                  class_index,
+                                                  &eviction_class,
+                                                  &eviction)) {
+#ifdef HPLF_TESTING
+            cached_test_stats.published_blocks += eviction.count;
+#endif
+            hplf_transfer_mutex_publish(eviction_class, &eviction);
+        }
+#else
+        if (pthread_mutex_lock(&allocator_state.registry_mutex) == 0) {
             block->requested_size = 0;
             block->next_free = allocator_state.free_lists[class_index];
             allocator_state.free_lists[class_index] = block;
-            (void)pthread_mutex_unlock(&allocator_state.mutex);
+            (void)pthread_mutex_unlock(&allocator_state.registry_mutex);
         }
+#endif
     }
     errno = saved_errno;
 }
@@ -228,13 +351,33 @@ void *hplf_realloc(void *pointer, size_t size)
 
 void hplf_thread_flush(void)
 {
+#ifdef HPLF_VARIANT_CACHED_MUTEX
+    size_t class_index;
+
+    /* I08: class-index order makes explicit and exit flushes reproducible. */
+    for (class_index = 0; class_index < HPLF_SIZE_CLASS_COUNT; ++class_index) {
+        struct hplf_transfer_list list;
+
+        if (hplf_thread_cache_extract_class(&thread_cache,
+                                            class_index,
+                                            SIZE_MAX,
+                                            &list)) {
+#ifdef HPLF_TESTING
+            cached_test_stats.published_blocks += list.count;
+#endif
+            hplf_transfer_mutex_publish(class_index, &list);
+        }
+    }
+#else
     /* ADR-006: the locked baseline has no thread-local cache to publish. */
+#endif
 }
 
-static size_t hplf_slab_free_count(const struct hplf_slab *slab)
+static size_t hplf_slab_free_count(
+    const struct hplf_slab *slab,
+    struct hplf_block *const free_lists[HPLF_SIZE_CLASS_COUNT])
 {
-    const struct hplf_block *block =
-        allocator_state.free_lists[slab->class_index];
+    const struct hplf_block *block = free_lists[slab->class_index];
     size_t count = 0;
 
     while (block != NULL) {
@@ -248,9 +391,10 @@ static size_t hplf_slab_free_count(const struct hplf_slab *slab)
 
 static struct hplf_block *hplf_detach_slab_blocks(
     const struct hplf_slab *slab,
+    struct hplf_block *free_lists[HPLF_SIZE_CLASS_COUNT],
     struct hplf_block **remaining_output)
 {
-    struct hplf_block *block = allocator_state.free_lists[slab->class_index];
+    struct hplf_block *block = free_lists[slab->class_index];
     struct hplf_block *removed = NULL;
     struct hplf_block *remaining = NULL;
 
@@ -287,10 +431,27 @@ size_t hplf_trim_quiescent(void)
 {
     struct hplf_slab **registry_link;
     size_t released_total = 0;
+#ifdef HPLF_VARIANT_CACHED_MUTEX
+    struct hplf_transfer_list detached[HPLF_SIZE_CLASS_COUNT];
+    struct hplf_block *free_lists[HPLF_SIZE_CLASS_COUNT];
+    size_t transfer_index;
+#else
+    struct hplf_block **free_lists = allocator_state.free_lists;
+#endif
 
-    if (pthread_mutex_lock(&allocator_state.mutex) != 0) {
+    if (pthread_mutex_lock(&allocator_state.registry_mutex) != 0) {
         return 0;
     }
+
+#ifdef HPLF_VARIANT_CACHED_MUTEX
+    /* The public precondition guarantees no peer publisher overlaps this detach. */
+    for (transfer_index = 0;
+         transfer_index < HPLF_SIZE_CLASS_COUNT;
+         ++transfer_index) {
+        hplf_transfer_mutex_detach(transfer_index, &detached[transfer_index]);
+        free_lists[transfer_index] = detached[transfer_index].first;
+    }
+#endif
 
     registry_link = &allocator_state.slabs;
     while (*registry_link != NULL) {
@@ -303,7 +464,7 @@ size_t hplf_trim_quiescent(void)
         size_t released_bytes;
         size_t new_total;
 
-        if (hplf_slab_free_count(slab) != slab->slot_count) {
+        if (hplf_slab_free_count(slab, free_lists) != slab->slot_count) {
             registry_link = &slab->next;
             continue;
         }
@@ -313,8 +474,8 @@ size_t hplf_trim_quiescent(void)
             .base = slab->mapping_base,
             .length = slab->mapping_length
         };
-        removed = hplf_detach_slab_blocks(slab, &remaining);
-        allocator_state.free_lists[class_index] = remaining;
+        removed = hplf_detach_slab_blocks(slab, free_lists, &remaining);
+        free_lists[class_index] = remaining;
         *registry_link = next;
 
         if (hplf_os_unmap(&mapping, &released_bytes)) {
@@ -328,13 +489,157 @@ size_t hplf_trim_quiescent(void)
         }
 
         /* Failed unmap retains ownership, so restore both reachable structures. */
-        allocator_state.free_lists[class_index] =
-            hplf_join_free_lists(removed, remaining);
+        free_lists[class_index] = hplf_join_free_lists(removed, remaining);
         slab->next = next;
         *registry_link = slab;
         registry_link = &slab->next;
     }
 
-    (void)pthread_mutex_unlock(&allocator_state.mutex);
+#ifdef HPLF_VARIANT_CACHED_MUTEX
+    for (transfer_index = 0;
+         transfer_index < HPLF_SIZE_CLASS_COUNT;
+         ++transfer_index) {
+        hplf_transfer_list_from_chain(&detached[transfer_index],
+                                      free_lists[transfer_index]);
+        hplf_transfer_mutex_publish(transfer_index, &detached[transfer_index]);
+    }
+#endif
+    (void)pthread_mutex_unlock(&allocator_state.registry_mutex);
     return released_total;
 }
+
+#if defined(HPLF_TESTING) && defined(HPLF_VARIANT_CACHED_MUTEX)
+void hplf_cached_test_stats_reset(void)
+{
+    cached_test_stats = (struct hplf_cached_test_stats){0};
+}
+
+void hplf_cached_test_stats_get(struct hplf_cached_test_stats *stats)
+{
+    *stats = cached_test_stats;
+}
+
+static bool hplf_cached_block_belongs_to_registry(
+    const struct hplf_block *block)
+{
+    const struct hplf_slab *slab;
+
+    for (slab = allocator_state.slabs; slab != NULL; slab = slab->next) {
+        uintptr_t first = (uintptr_t)slab + slab->first_slot_offset;
+        uintptr_t candidate = (uintptr_t)block;
+        size_t offset;
+
+        if (block->owner.small.slab != slab || candidate < first) {
+            continue;
+        }
+        offset = (size_t)(candidate - first);
+        if (offset % slab->slot_stride == 0 &&
+            offset / slab->slot_stride < slab->slot_count) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static size_t hplf_cached_block_occurrences(
+    const struct hplf_block *candidate,
+    struct hplf_block *const heads[HPLF_SIZE_CLASS_COUNT])
+{
+    size_t class_index;
+    size_t occurrences = 0;
+
+    for (class_index = 0; class_index < HPLF_SIZE_CLASS_COUNT; ++class_index) {
+        const struct hplf_block *block = heads[class_index];
+
+        while (block != NULL) {
+            if (block == candidate) {
+                ++occurrences;
+            }
+            block = block->next_free;
+        }
+    }
+    return occurrences;
+}
+
+bool hplf_cached_test_snapshot(struct hplf_cached_test_snapshot *snapshot)
+{
+    struct hplf_thread_cache_snapshot local;
+    struct hplf_transfer_list lists[HPLF_SIZE_CLASS_COUNT];
+    struct hplf_block *heads[HPLF_SIZE_CLASS_COUNT];
+    struct hplf_slab *slab;
+    size_t class_index;
+    bool valid = true;
+
+    *snapshot = (struct hplf_cached_test_snapshot){0};
+    snapshot->cache_counts_match = hplf_thread_cache_snapshot(&thread_cache,
+                                                               &local);
+    for (class_index = 0; class_index < HPLF_SIZE_CLASS_COUNT; ++class_index) {
+        snapshot->current_local_blocks += local.counts[class_index];
+    }
+    snapshot->current_local_bytes = local.total_slot_bytes;
+
+    if (pthread_mutex_lock(&allocator_state.registry_mutex) != 0) {
+        return false;
+    }
+    for (class_index = 0; class_index < HPLF_SIZE_CLASS_COUNT; ++class_index) {
+        hplf_transfer_mutex_detach(class_index, &lists[class_index]);
+        heads[class_index] = lists[class_index].first;
+    }
+
+    for (slab = allocator_state.slabs; slab != NULL; slab = slab->next) {
+        ++snapshot->slab_count;
+        snapshot->total_slots += slab->slot_count;
+    }
+    snapshot->transfer_counts_match = true;
+    snapshot->unique_free_blocks = true;
+    for (class_index = 0; class_index < HPLF_SIZE_CLASS_COUNT; ++class_index) {
+        struct hplf_block *local_block = thread_cache.heads[class_index];
+        struct hplf_block *block = heads[class_index];
+        size_t traversed = 0;
+
+        while (local_block != NULL) {
+            if (local_block->kind != HPLF_BLOCK_SMALL ||
+                !hplf_cached_block_belongs_to_registry(local_block) ||
+                local_block->owner.small.slab->class_index != class_index ||
+                hplf_cached_block_occurrences(local_block, heads) != 0 ||
+                hplf_cached_block_occurrences(local_block,
+                                              thread_cache.heads) != 1) {
+                snapshot->unique_free_blocks = false;
+            }
+            local_block = local_block->next_free;
+        }
+
+        while (block != NULL) {
+            if (block->kind != HPLF_BLOCK_SMALL ||
+                !hplf_cached_block_belongs_to_registry(block) ||
+                block->owner.small.slab->class_index != class_index ||
+                hplf_cached_block_occurrences(block, heads) != 1) {
+                snapshot->unique_free_blocks = false;
+            }
+            ++traversed;
+            block = block->next_free;
+        }
+        if (traversed != lists[class_index].count) {
+            snapshot->transfer_counts_match = false;
+        }
+        snapshot->shared_free_blocks += traversed;
+    }
+    if (snapshot->shared_free_blocks > snapshot->total_slots ||
+        snapshot->current_local_blocks >
+            snapshot->total_slots - snapshot->shared_free_blocks) {
+        snapshot->unique_free_blocks = false;
+        valid = false;
+    } else {
+        snapshot->live_blocks = snapshot->total_slots -
+                                snapshot->shared_free_blocks -
+                                snapshot->current_local_blocks;
+    }
+
+    for (class_index = 0; class_index < HPLF_SIZE_CLASS_COUNT; ++class_index) {
+        hplf_transfer_mutex_publish(class_index, &lists[class_index]);
+    }
+    (void)pthread_mutex_unlock(&allocator_state.registry_mutex);
+    return valid && snapshot->cache_counts_match &&
+           snapshot->transfer_counts_match && snapshot->unique_free_blocks;
+}
+#endif
