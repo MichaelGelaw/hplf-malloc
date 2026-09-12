@@ -125,3 +125,26 @@ set_tests_properties(randomized PROPERTIES
     LABELS "api;randomized"
     TIMEOUT 120
 )
+
+find_program(HPLF_BASH_PROGRAM bash REQUIRED)
+set(HPLF_CLIENT_SANITIZER none)
+if(HPLF_ENABLE_ASAN_UBSAN)
+    set(HPLF_CLIENT_SANITIZER address,undefined)
+elseif(HPLF_ENABLE_TSAN)
+    set(HPLF_CLIENT_SANITIZER thread)
+endif()
+
+add_test(NAME installed_client
+    COMMAND ${HPLF_BASH_PROGRAM}
+        ${PROJECT_SOURCE_DIR}/scripts/test_install.sh
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_BINARY_DIR}
+        ${HPLF_CLIENT_SANITIZER}
+        ${CMAKE_C_COMPILER}
+)
+set_tests_properties(installed_client PROPERTIES
+    LABELS "integration;packaging"
+    PASS_REGULAR_EXPRESSION "installed-client mode=SHARED"
+    RUN_SERIAL TRUE
+    TIMEOUT 120
+)

@@ -63,7 +63,10 @@ foreach(target IN ITEMS hplf_static hplf_shared)
             ${PROJECT_SOURCE_DIR}/src
     )
     target_link_libraries(${target} PRIVATE Threads::Threads)
-    set_target_properties(${target} PROPERTIES OUTPUT_NAME hplf)
+    set_target_properties(${target} PROPERTIES
+        C_VISIBILITY_PRESET hidden
+        OUTPUT_NAME hplf
+    )
 endforeach()
 
 set_target_properties(hplf_shared PROPERTIES
@@ -82,3 +85,5 @@ install(FILES include/hplf/allocator.h
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+
+add_subdirectory(benchmarks)
