@@ -22,7 +22,10 @@ include(CTest)
 
 function(hplf_configure_target target)
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_definitions(${target} PRIVATE _POSIX_C_SOURCE=200809L)
+    target_compile_definitions(${target} PRIVATE
+        _DEFAULT_SOURCE
+        _POSIX_C_SOURCE=200809L
+    )
 
     if(HPLF_ENABLE_ASAN_UBSAN)
         target_compile_options(${target} PRIVATE
