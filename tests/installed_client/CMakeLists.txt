@@ -9,6 +9,9 @@ set(CMAKE_C_EXTENSIONS OFF)
 if(NOT DEFINED HPLF_SANITIZER)
     set(HPLF_SANITIZER none)
 endif()
+if(NOT DEFINED HPLF_SOURCE_ROOT)
+    message(FATAL_ERROR "HPLF_SOURCE_ROOT is required")
+endif()
 
 if(NOT HPLF_LINK_MODE STREQUAL "STATIC" AND
    NOT HPLF_LINK_MODE STREQUAL "SHARED")
@@ -61,3 +64,35 @@ if(NOT HPLF_SANITIZER STREQUAL "none")
         "-fsanitize=${HPLF_SANITIZER}"
     )
 endif()
+
+# Both executables compile the same application source; only this adapter unit and
+# the link dependency differ. HPLF_INCLUDE_DIR comes solely from the install tree.
+add_executable(hplf_worker_pool_installed
+    "${HPLF_SOURCE_ROOT}/examples/worker_pool.c"
+    "${HPLF_SOURCE_ROOT}/examples/adapters/hplf.c"
+)
+add_executable(libc_worker_pool_installed
+    "${HPLF_SOURCE_ROOT}/examples/worker_pool.c"
+    "${HPLF_SOURCE_ROOT}/examples/adapters/libc.c"
+)
+
+foreach(target IN ITEMS hplf_worker_pool_installed libc_worker_pool_installed)
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_definitions(${target} PRIVATE _POSIX_C_SOURCE=200809L)
+    target_include_directories(${target} PRIVATE
+        "${HPLF_SOURCE_ROOT}/examples"
+    )
+    target_link_libraries(${target} PRIVATE Threads::Threads)
+    if(NOT HPLF_SANITIZER STREQUAL "none")
+        target_compile_options(${target} PRIVATE
+            "-fsanitize=${HPLF_SANITIZER}"
+            -fno-omit-frame-pointer
+        )
+        target_link_options(${target} PRIVATE
+            "-fsanitize=${HPLF_SANITIZER}"
+        )
+    endif()
+endforeach()
+
+target_include_directories(hplf_worker_pool_installed PRIVATE "${HPLF_INCLUDE_DIR}")
+target_link_libraries(hplf_worker_pool_installed PRIVATE "${HPLF_LIBRARY}")

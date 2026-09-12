@@ -28,6 +28,7 @@ for mode in STATIC SHARED; do
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER="$compiler" \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+        -DHPLF_SOURCE_ROOT="$source_dir" \
         -DHPLF_ROOT="$prefix" \
         -DHPLF_LINK_MODE="$mode" \
         -DHPLF_SANITIZER="$sanitizer"
@@ -37,10 +38,18 @@ for mode in STATIC SHARED; do
         echo "installed client leaked a source-internal include path" >&2
         exit 1
     fi
+
+    LD_LIBRARY_PATH="$prefix/lib" \
+        "$source_dir/scripts/test_worker_pool.sh" \
+        "$client_build/libc_worker_pool_installed" \
+        "$client_build/hplf_worker_pool_installed" \
+        "$mode"
 done
 
 static_client="$smoke_root/client-static/hplf_installed_client"
 shared_client="$smoke_root/client-shared/hplf_installed_client"
+static_worker="$smoke_root/client-static/hplf_worker_pool_installed"
+shared_worker="$smoke_root/client-shared/hplf_worker_pool_installed"
 shared_library="$prefix/lib/libhplf.so.0"
 exported_symbols="$smoke_root/exported-symbols.txt"
 
@@ -48,7 +57,13 @@ if readelf -d "$static_client" | grep 'libhplf' >/dev/null; then
     echo "static client unexpectedly depends on a shared hplf library" >&2
     exit 1
 fi
+if readelf -d "$static_worker" | grep 'libhplf' >/dev/null; then
+    echo "static worker pool unexpectedly depends on a shared hplf library" >&2
+    exit 1
+fi
 readelf -d "$shared_client" |
+    grep 'Shared library: \[libhplf.so.0\]' >/dev/null
+readelf -d "$shared_worker" |
     grep 'Shared library: \[libhplf.so.0\]' >/dev/null
 
 nm -D --defined-only "$shared_library" | awk '{print $3}' > "$exported_symbols"
@@ -60,7 +75,8 @@ if [[ $(awk '/^hplf_/ {count++} END {print count+0}' "$exported_symbols") -ne 6 
     echo "shared library exports an unexpected hplf symbol" >&2
     exit 1
 fi
-if readelf -d "$shared_library" "$static_client" "$shared_client" |
+if readelf -d "$shared_library" "$static_client" "$shared_client" \
+                  "$static_worker" "$shared_worker" |
    grep 'libstdc++' >/dev/null; then
     echo "C clients unexpectedly depend on the C++ runtime" >&2
     exit 1
