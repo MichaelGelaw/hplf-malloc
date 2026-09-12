@@ -126,6 +126,23 @@ set_tests_properties(randomized PROPERTIES
     TIMEOUT 120
 )
 
+add_executable(hplf_test_cache
+    test_cache.c
+    ${PROJECT_SOURCE_DIR}/src/thread_cache.c
+    ${PROJECT_SOURCE_DIR}/src/transfer_mutex.c
+    ${PROJECT_SOURCE_DIR}/src/size_class.c
+)
+hplf_configure_target(hplf_test_cache)
+target_compile_definitions(hplf_test_cache PRIVATE HPLF_TESTING)
+target_include_directories(hplf_test_cache PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(hplf_test_cache PRIVATE Threads::Threads)
+
+add_test(NAME cache COMMAND hplf_test_cache)
+set_tests_properties(cache PROPERTIES
+    LABELS "unit;concurrency;cache"
+    TIMEOUT 20
+)
+
 find_program(HPLF_BASH_PROGRAM bash REQUIRED)
 set(HPLF_CLIENT_SANITIZER none)
 if(HPLF_ENABLE_ASAN_UBSAN)
