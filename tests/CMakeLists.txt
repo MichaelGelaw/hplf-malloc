@@ -79,3 +79,49 @@ set_tests_properties(slab PROPERTIES
     LABELS "unit"
     TIMEOUT 20
 )
+
+add_library(hplf_test_pattern STATIC support/pattern.c)
+hplf_configure_target(hplf_test_pattern)
+target_include_directories(hplf_test_pattern PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/support)
+
+add_executable(hplf_test_api test_api.c)
+hplf_configure_target(hplf_test_api)
+target_compile_definitions(hplf_test_api PRIVATE HPLF_TESTING)
+target_include_directories(hplf_test_api PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(hplf_test_api PRIVATE
+    hplf_test_allocator_core
+    hplf_test_pattern
+)
+
+add_test(NAME api COMMAND hplf_test_api)
+set_tests_properties(api PROPERTIES
+    LABELS "api;unit"
+    TIMEOUT 20
+)
+
+add_executable(hplf_test_trim test_trim.c)
+hplf_configure_target(hplf_test_trim)
+target_compile_definitions(hplf_test_trim PRIVATE HPLF_TESTING)
+target_include_directories(hplf_test_trim PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(hplf_test_trim PRIVATE hplf_test_allocator_core)
+
+add_test(NAME trim COMMAND hplf_test_trim)
+set_tests_properties(trim PROPERTIES
+    LABELS "api;unit"
+    TIMEOUT 20
+)
+
+add_executable(hplf_test_randomized test_randomized.c)
+hplf_configure_target(hplf_test_randomized)
+target_compile_definitions(hplf_test_randomized PRIVATE HPLF_TESTING)
+target_include_directories(hplf_test_randomized PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(hplf_test_randomized PRIVATE
+    hplf_test_allocator_core
+    hplf_test_pattern
+)
+
+add_test(NAME randomized COMMAND hplf_test_randomized)
+set_tests_properties(randomized PROPERTIES
+    LABELS "api;randomized"
+    TIMEOUT 120
+)
