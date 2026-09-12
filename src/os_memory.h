@@ -25,10 +25,19 @@ bool hplf_os_map(size_t minimum_length, struct hplf_os_mapping *output);
 bool hplf_os_unmap(struct hplf_os_mapping *mapping, size_t *released_bytes);
 
 #ifdef HPLF_TESTING
+struct hplf_os_test_counters {
+    size_t page_queries;
+    size_t map_attempts;
+    size_t unmap_attempts;
+    size_t successful_maps;
+    size_t successful_unmaps;
+};
+
 void hplf_os_test_faults_reset(void);
 void hplf_os_test_fail_page_query_on(size_t call_number);
 void hplf_os_test_fail_map_on(size_t call_number);
 void hplf_os_test_fail_unmap_on(size_t call_number);
+void hplf_os_test_get_counters(struct hplf_os_test_counters *counters);
 #endif
 
 #endif

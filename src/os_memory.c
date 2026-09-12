@@ -14,6 +14,8 @@ struct hplf_os_fault_state {
     _Atomic size_t page_query_calls;
     _Atomic size_t map_calls;
     _Atomic size_t unmap_calls;
+    _Atomic size_t successful_maps;
+    _Atomic size_t successful_unmaps;
     _Atomic size_t fail_page_query_on;
     _Atomic size_t fail_map_on;
     _Atomic size_t fail_unmap_on;
@@ -35,6 +37,8 @@ void hplf_os_test_faults_reset(void)
     atomic_store_explicit(&fault_state.page_query_calls, 0, memory_order_relaxed);
     atomic_store_explicit(&fault_state.map_calls, 0, memory_order_relaxed);
     atomic_store_explicit(&fault_state.unmap_calls, 0, memory_order_relaxed);
+    atomic_store_explicit(&fault_state.successful_maps, 0, memory_order_relaxed);
+    atomic_store_explicit(&fault_state.successful_unmaps, 0, memory_order_relaxed);
     atomic_store_explicit(&fault_state.fail_page_query_on, 0, memory_order_relaxed);
     atomic_store_explicit(&fault_state.fail_map_on, 0, memory_order_relaxed);
     atomic_store_explicit(&fault_state.fail_unmap_on, 0, memory_order_relaxed);
@@ -59,6 +63,24 @@ void hplf_os_test_fail_unmap_on(size_t call_number)
     atomic_store_explicit(&fault_state.fail_unmap_on,
                           call_number,
                           memory_order_relaxed);
+}
+
+void hplf_os_test_get_counters(struct hplf_os_test_counters *counters)
+{
+    if (counters == NULL) {
+        return;
+    }
+
+    counters->page_queries = atomic_load_explicit(&fault_state.page_query_calls,
+                                                   memory_order_relaxed);
+    counters->map_attempts = atomic_load_explicit(&fault_state.map_calls,
+                                                   memory_order_relaxed);
+    counters->unmap_attempts = atomic_load_explicit(&fault_state.unmap_calls,
+                                                     memory_order_relaxed);
+    counters->successful_maps = atomic_load_explicit(&fault_state.successful_maps,
+                                                      memory_order_relaxed);
+    counters->successful_unmaps = atomic_load_explicit(&fault_state.successful_unmaps,
+                                                        memory_order_relaxed);
 }
 #endif
 
@@ -127,6 +149,10 @@ bool hplf_os_map(size_t minimum_length, struct hplf_os_mapping *output)
         return false;
     }
 
+#ifdef HPLF_TESTING
+    atomic_fetch_add_explicit(&fault_state.successful_maps, 1, memory_order_relaxed);
+#endif
+
     /* I01: mmap returns page-aligned storage; publish both ownership fields together. */
     output->base = base;
     output->length = mapping_length;
@@ -163,6 +189,10 @@ bool hplf_os_unmap(struct hplf_os_mapping *mapping, size_t *released_bytes)
     if (munmap(base, length) != 0) {
         return false;
     }
+
+#ifdef HPLF_TESTING
+    atomic_fetch_add_explicit(&fault_state.successful_unmaps, 1, memory_order_relaxed);
+#endif
 
     mapping->base = NULL;
     mapping->length = 0;

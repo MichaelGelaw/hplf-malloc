@@ -42,3 +42,40 @@ set_tests_properties(layout PROPERTIES
     LABELS "unit"
     TIMEOUT 10
 )
+
+add_executable(hplf_test_size_class
+    test_size_class.c
+    ${PROJECT_SOURCE_DIR}/src/size_class.c
+)
+hplf_configure_target(hplf_test_size_class)
+target_include_directories(hplf_test_size_class PRIVATE ${PROJECT_SOURCE_DIR}/src)
+
+add_test(NAME size_class COMMAND hplf_test_size_class)
+set_tests_properties(size_class PROPERTIES
+    LABELS "unit"
+    TIMEOUT 10
+)
+
+add_library(hplf_test_allocator_core STATIC ${HPLF_SOURCES})
+hplf_configure_target(hplf_test_allocator_core)
+target_compile_definitions(hplf_test_allocator_core PRIVATE HPLF_TESTING)
+target_include_directories(hplf_test_allocator_core
+    PUBLIC ${PROJECT_SOURCE_DIR}/include
+    PRIVATE ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(hplf_test_allocator_core PRIVATE Threads::Threads)
+
+add_executable(hplf_test_slab test_slab.c)
+hplf_configure_target(hplf_test_slab)
+target_compile_definitions(hplf_test_slab PRIVATE HPLF_TESTING)
+target_include_directories(hplf_test_slab PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(hplf_test_slab PRIVATE
+    hplf_test_allocator_core
+    Threads::Threads
+)
+
+add_test(NAME slab COMMAND hplf_test_slab)
+set_tests_properties(slab PROPERTIES
+    LABELS "unit"
+    TIMEOUT 20
+)

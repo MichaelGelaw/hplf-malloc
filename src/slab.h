@@ -34,6 +34,15 @@ struct hplf_slab_layout {
 };
 
 /*
+ * Creates a fully initialized slab and private free chain. Outputs remain
+ * unchanged on failure; the caller publishes both while holding its registry lock.
+ */
+bool hplf_slab_create(size_t class_index,
+                      size_t class_capacity,
+                      struct hplf_slab **slab_output,
+                      struct hplf_block **free_list_output);
+
+/*
  * I01/I09: all byte counts are validated before publishing the result. Slots begin
  * at max_align_t boundaries, and stride covers both prefix and payload capacity.
  */

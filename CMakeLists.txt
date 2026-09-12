@@ -43,8 +43,15 @@ function(hplf_configure_target target)
     endif()
 endfunction()
 
-add_library(hplf_static STATIC src/os_memory.c)
-add_library(hplf_shared SHARED src/os_memory.c)
+set(HPLF_SOURCES
+    ${PROJECT_SOURCE_DIR}/src/allocator.c
+    ${PROJECT_SOURCE_DIR}/src/os_memory.c
+    ${PROJECT_SOURCE_DIR}/src/size_class.c
+    ${PROJECT_SOURCE_DIR}/src/slab.c
+)
+
+add_library(hplf_static STATIC ${HPLF_SOURCES})
+add_library(hplf_shared SHARED ${HPLF_SOURCES})
 
 foreach(target IN ITEMS hplf_static hplf_shared)
     hplf_configure_target(${target})
@@ -55,6 +62,7 @@ foreach(target IN ITEMS hplf_static hplf_shared)
         PRIVATE
             ${PROJECT_SOURCE_DIR}/src
     )
+    target_link_libraries(${target} PRIVATE Threads::Threads)
     set_target_properties(${target} PROPERTIES OUTPUT_NAME hplf)
 endforeach()
 
