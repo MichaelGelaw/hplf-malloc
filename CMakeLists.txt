@@ -19,6 +19,7 @@ endif()
 
 find_package(Threads REQUIRED)
 include(CTest)
+include(GNUInstallDirs)
 
 function(hplf_configure_target target)
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
@@ -41,6 +42,34 @@ function(hplf_configure_target target)
         target_link_options(${target} PRIVATE -fsanitize=thread)
     endif()
 endfunction()
+
+add_library(hplf_static STATIC src/os_memory.c)
+add_library(hplf_shared SHARED src/os_memory.c)
+
+foreach(target IN ITEMS hplf_static hplf_shared)
+    hplf_configure_target(${target})
+    target_include_directories(${target}
+        PUBLIC
+            $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+    )
+    set_target_properties(${target} PROPERTIES OUTPUT_NAME hplf)
+endforeach()
+
+set_target_properties(hplf_shared PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+)
+
+install(TARGETS hplf_static hplf_shared
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+install(FILES include/hplf/allocator.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/hplf
+)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)

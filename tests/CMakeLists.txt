@@ -31,3 +31,14 @@ set_tests_properties(os_memory PROPERTIES
     LABELS "unit"
     TIMEOUT 10
 )
+
+add_executable(hplf_test_layout test_layout.c)
+hplf_configure_target(hplf_test_layout)
+target_include_directories(hplf_test_layout PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(hplf_test_layout PRIVATE hplf_static)
+
+add_test(NAME layout COMMAND hplf_test_layout)
+set_tests_properties(layout PROPERTIES
+    LABELS "unit"
+    TIMEOUT 10
+)
